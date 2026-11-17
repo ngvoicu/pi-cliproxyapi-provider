@@ -8,7 +8,7 @@ import {
 	type CodexClientModel,
 	claudeFormatFor,
 	claudeMessagesMode,
-	fetchModelOwners,
+	fetchModelSources,
 	loadBuiltinClaudeFormatCatalog,
 	loadMappedModels,
 	reportedMaxTokens,
@@ -136,17 +136,17 @@ describe("toPiModel with the Claude format", () => {
 	});
 });
 
-describe("fetchModelOwners", () => {
+describe("fetchModelSources owners", () => {
 	it("maps id to owned_by and survives failures", async () => {
 		vi.spyOn(globalThis, "fetch")
 			.mockResolvedValueOnce(
 				new Response(JSON.stringify({ data: [{ id: "claude-opus-5-5", owned_by: "Anthropic" }, { id: "x" }] })),
 			)
 			.mockRejectedValueOnce(new Error("offline"));
-		const owners = await fetchModelOwners("http://cpa/v1/models", "key");
+		const { owners } = await fetchModelSources("http://cpa/v1/models", "key");
 		expect(owners.get("claude-opus-5-5")).toBe("anthropic");
 		expect(owners.has("x")).toBe(false);
-		expect((await fetchModelOwners("http://cpa/v1/models", "key")).size).toBe(0);
+		expect((await fetchModelSources("http://cpa/v1/models", "key")).owners.size).toBe(0);
 	});
 });
 
@@ -169,7 +169,7 @@ describe("loadMappedModels with claudeMessages", () => {
 					}),
 				);
 			}
-			if (url.endsWith("/v1/models")) {
+			if (url.endsWith("/v1/models?include=accounts")) {
 				return new Response(
 					JSON.stringify({
 						data: [
@@ -217,11 +217,11 @@ describe("loadMappedModels with claudeMessages", () => {
 		expect(withoutLimit.fastModelIds).toContain("claude-opus-5-5");
 	});
 
-	it("doesn't fetch owners or change anything when off", async () => {
+	it("changes no format when off, though the list is still read for where models come from", async () => {
 		const fetchMock = mockCpa(64000);
 		const loaded = await loadMappedModels("http://127.0.0.1:8317", "key", false, agentDir());
 		expect(loaded.models.every((m) => m.api === undefined)).toBe(true);
-		expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/v1/models"))).toBe(false);
+		expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("include=accounts"))).toHaveLength(1);
 		expect(loaded).not.toHaveProperty("claudeMessages");
 	});
 });

@@ -22,6 +22,9 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { resolveEndpoints } from "./lib.ts";
+import { type Account, likelyAccounts, parseAccounts } from "./sources.ts";
+
+export { type Account, likelyAccounts } from "./sources.ts";
 
 export const REQUEST_EVENT = "model-upstreams:request";
 export const UPSTREAMS_EVENT = "model-upstreams";
@@ -40,17 +43,6 @@ export interface Upstream {
 export interface Route {
 	upstreams: Upstream[];
 	fallbacks?: Upstream[];
-}
-
-/** A credential that serves a model, as `/v1/models?include=accounts` lists it. */
-export interface Account {
-	/** CLIProxyAPI's provider: claude, codex, meta, devin, antigravity, gemini, openai-compatible-<name> … */
-	provider: string;
-	/** "oauth" for a subscription login, "apikey" for an API key. */
-	kind: string;
-	priority: number;
-	/** The host of an API key's base URL. */
-	host?: string;
 }
 
 export interface ModelAccounts {
@@ -100,18 +92,6 @@ export function upstreamOf(account: Account, modelId: string): Upstream | undefi
 	// OpenRouter's names are `lab/model`; nobody else's have a slash, so one there is a prefix the proxy added.
 	const model = provider === "openrouter" ? modelId : modelId.slice(modelId.lastIndexOf("/") + 1);
 	return { provider, ...(model !== modelId ? { model } : {}), subscription: account.kind !== "apikey" };
-}
-
-/**
- * The credentials CLIProxyAPI may answer with: those at the highest priority. It uses the highest priority that is
- * free in every routing mode, and picks among the credentials sharing it (round-robin by default; with no priority
- * set, all share 0). Given a kind, among the credentials of that kind.
- */
-export function likelyAccounts(accounts: Account[], kind?: string): Account[] {
-	const candidates = kind ? accounts.filter((account) => account.kind === kind) : accounts;
-	if (candidates.length === 0) return [];
-	const top = Math.max(...candidates.map((account) => account.priority));
-	return candidates.filter((account) => account.priority === top);
 }
 
 const unique = (upstreams: Upstream[]): Upstream[] => {
@@ -179,17 +159,7 @@ export async function fetchModelAccounts(
 	for (const model of body.data) {
 		if (!isRecord(model) || typeof model.id !== "string") continue;
 		if (typeof model.owned_by === "string") listed.owners[model.id] = model.owned_by.trim().toLowerCase();
-		if (!Array.isArray(model.accounts)) continue;
-		const accounts: Account[] = [];
-		for (const account of model.accounts) {
-			if (!isRecord(account) || typeof account.provider !== "string" || typeof account.kind !== "string") continue;
-			accounts.push({
-				provider: account.provider,
-				kind: account.kind,
-				priority: typeof account.priority === "number" ? account.priority : 0,
-				...(typeof account.host === "string" && account.host ? { host: account.host.toLowerCase() } : {}),
-			});
-		}
+		const accounts = parseAccounts(model.accounts);
 		if (accounts.length > 0) listed.accounts[model.id] = accounts;
 	}
 	return listed;

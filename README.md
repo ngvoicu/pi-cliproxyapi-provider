@@ -204,7 +204,7 @@ From CPA catalog entry → pi model:
 | CPA field | Pi field |
 | ----------- | ---------- |
 | `slug` | `id` |
-| `display_name` | `name` |
+| `display_name` | `name`, followed by [where the model comes from](#where-each-model-comes-from-in-its-name) when CLIProxyAPI says |
 | `context_window` | `contextWindow` |
 | `input_modalities` | `input` (`text` / `image`) |
 | `supported_reasoning_levels[].effort` | `thinkingLevelMap` + `reasoning` |
@@ -243,6 +243,37 @@ instead of the Codex Responses format every other model uses. This happens autom
   tools, images and auto-compaction work as before.
 - Changing the setting refreshes the model list (the cache records it). The first request of an ongoing session after
   a model switches formats is a cache miss.
+
+## Where each model comes from, in its name
+
+Through CLIProxyAPI pi sees one provider, so its model list does not say whether a model is served by a subscription
+login or by a paid API key, nor by whom. A CLIProxyAPI that lists its credentials
+([router-for-me/CLIProxyAPI#7634](https://github.com/router-for-me/CLIProxyAPI/pull/7634)) is asked for them with the
+plain model list (`GET /v1/models?include=accounts`, one request per model list refresh), and each model's name then
+ends with where it comes from:
+
+```
+Claude Opus 5.5 · Anthropic sub, fallback api
+Claude Sonnet 4.6 · Anthropic sub, fallback Antigravity sub
+anthropic/claude-opus-5.5 · OpenRouter api
+```
+
+- **`sub`** is a subscription login, **`api`** an API key.
+- **First** comes what CLIProxyAPI may answer with: the credentials at the highest priority, joined by `or` when they
+  differ (`Anthropic sub or api`). **After `fallback`** come the others, highest priority first: what may answer when
+  the first fail or cool down. A service is named again only when it changes.
+- **The service** is the one behind CLIProxyAPI's provider (`claude` is Anthropic, `codex` is OpenAI …). An API key
+  goes by the host CLIProxyAPI names for it (`openrouter.ai` is OpenRouter whatever the entry is called; a host that
+  is not known is shown as it is). A provider that is not known keeps CLIProxyAPI's name for it.
+- Everything is read from CLIProxyAPI's list; nothing is guessed from a model's id or owner. A CLIProxyAPI that does
+  not list its credentials, or a list that can't be read, leaves every name as it was.
+- It says what the list said when it was fetched: after changing credentials or priorities in CLIProxyAPI, run
+  `/cliproxyapi-refresh` (the startup refresh also updates it). What answered a given request is a separate matter:
+  see the next section.
+
+pi shows a model's name in `/model` beside its id and searches it, and its model patterns (`--model`, scoped models)
+also match names: `openrouter` now matches every model that comes from OpenRouter, not only ids that contain the
+word.
 
 ## Where each model comes from (for other extensions)
 

@@ -6,6 +6,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
+import { type Account, parseAccounts, sourceLabel } from "./sources.ts";
 
 // Local shape matching pi ThinkingLevelMap; avoid hard runtime peer imports here.
 export type ThinkingLevelMap = Partial<
@@ -582,11 +583,15 @@ export function toPiModel(
 	costCatalog?: ModelsDevCostCatalog,
 	fastMode = false,
 	claudeFormat?: ClaudeFormatEntry,
+	/** Where the model comes from ("Anthropic sub, fallback api"), added to its name. */
+	source?: string,
 ): PiProviderModel | null {
 	const id = codexModelId(model);
 	if (!id) {
 		return null;
 	}
+	const baseName = (model.display_name ?? model.name ?? id).trim() || id;
+	const name = source ? `${baseName} · ${source}` : baseName;
 	if (String(model.visibility ?? "").toLowerCase() === "hide") {
 		return null;
 	}
@@ -609,7 +614,7 @@ export function toPiModel(
 	if (claudeFormat) {
 		return {
 			id,
-			name: (model.display_name ?? model.name ?? id).trim() || id,
+			name,
 			api: ANTHROPIC_MESSAGES_API,
 			reasoning: claudeFormat.reasoning,
 			input: buildInputModalities(model),
@@ -623,7 +628,7 @@ export function toPiModel(
 
 	return {
 		id,
-		name: (model.display_name ?? model.name ?? id).trim() || id,
+		name,
 		reasoning: hasReasoning,
 		input: buildInputModalities(model),
 		cost,
@@ -1052,32 +1057,45 @@ export async function loadBuiltinClaudeFormatCatalog(): Promise<ClaudeFormatCata
 	}
 }
 
-/** Model id → owned_by from CPA's plain OpenAI model list. Empty on any failure. */
-export async function fetchModelOwners(
+export interface ModelSources {
+	/** Model id → owned_by. */
+	owners: Map<string, string>;
+	/** Model id → the credentials that serve it; absent when CPA does not list them. */
+	accounts: Map<string, Account[]>;
+}
+
+/**
+ * CPA's plain OpenAI model list with the credentials that serve each model (`?include=accounts`). A CPA that does
+ * not know the parameter answers the plain list: owners only. Empty on any failure.
+ */
+export async function fetchModelSources(
 	plainModelsUrl: string,
 	apiKey: string,
 	timeoutMs = MODELS_REQUEST_TIMEOUT_MS,
 	signal?: AbortSignal,
-): Promise<Map<string, string>> {
-	const owners = new Map<string, string>();
+): Promise<ModelSources> {
+	const sources: ModelSources = { owners: new Map(), accounts: new Map() };
 	try {
 		const timeoutSignal = AbortSignal.timeout(timeoutMs);
-		const response = await fetch(plainModelsUrl, {
+		const response = await fetch(`${plainModelsUrl}?include=accounts`, {
 			headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
 			signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
 		});
-		if (!response.ok) return owners;
+		if (!response.ok) return sources;
 		const data = asRecord(await response.json())?.data;
 		for (const item of Array.isArray(data) ? data : []) {
 			const record = asRecord(item);
 			const id = typeof record?.id === "string" ? record.id.trim() : "";
+			if (!id) continue;
 			const ownedBy = typeof record?.owned_by === "string" ? record.owned_by.trim().toLowerCase() : "";
-			if (id && ownedBy) owners.set(id, ownedBy);
+			if (ownedBy) sources.owners.set(id, ownedBy);
+			const accounts = parseAccounts(record?.accounts);
+			if (accounts.length > 0) sources.accounts.set(id, accounts);
 		}
 	} catch {
-		// Without owners every model stays on the Codex format.
+		// Without the list every model stays on the Codex format, and no name says where a model comes from.
 	}
-	return owners;
+	return sources;
 }
 
 /** The Claude-format entry for a model, or undefined when it stays on the Codex format. */
@@ -1112,12 +1130,14 @@ export async function loadMappedModels(
 	const effectiveFastMode = typeof timeoutOrFastMode === "boolean" ? timeoutOrFastMode : false;
 	const timeoutMs = typeof timeoutOrFastMode === "number" ? timeoutOrFastMode : MODELS_REQUEST_TIMEOUT_MS;
 	const endpoints = resolveEndpoints(baseUrlInput);
-	const [remoteModels, costCatalog, owners, claudeCatalog] = await Promise.all([
+	// One request serves both: the owners decide the Claude format, the credentials say where a model comes from.
+	const [remoteModels, costCatalog, sources, claudeCatalog] = await Promise.all([
 		fetchCodexModels(endpoints.modelsUrl, apiKey, timeoutMs, signal),
 		pricingEnabled ? fetchModelsDevCostMap(agentDir, false, signal) : Promise.resolve(undefined),
-		claudeWanted ? fetchModelOwners(endpoints.plainModelsUrl, apiKey, timeoutMs, signal) : Promise.resolve(undefined),
+		fetchModelSources(endpoints.plainModelsUrl, apiKey, timeoutMs, signal),
 		claudeWanted ? loadBuiltinClaudeFormatCatalog() : Promise.resolve(undefined),
 	]);
+	const owners = claudeWanted ? sources.owners : undefined;
 	const claudeFormatIds = new Set<string>();
 	const models = remoteModels
 		.map((model) => {
@@ -1125,7 +1145,8 @@ export async function loadMappedModels(
 				owners && claudeCatalog && (claudeMode === "on" || reportedMaxTokens(model) !== undefined)
 					? claudeFormatFor(codexModelId(model), owners, claudeCatalog)
 					: undefined;
-			const mapped = toPiModel(model, costCatalog, effectiveFastMode, claudeFormat);
+			const source = sourceLabel(sources.accounts.get(codexModelId(model)) ?? []);
+			const mapped = toPiModel(model, costCatalog, effectiveFastMode, claudeFormat, source);
 			if (mapped && claudeFormat) claudeFormatIds.add(mapped.id);
 			return mapped;
 		})
