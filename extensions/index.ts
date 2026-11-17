@@ -63,6 +63,7 @@ import {
 import type { PauseController } from "./pause.ts";
 import { pauseController, waitForPauseToEnd } from "./pause.ts";
 import { registerTransientNetworkErrorRetry } from "./retry.ts";
+import { UpstreamsAnnouncer } from "./upstreams.ts";
 
 class ConfigPersistenceError extends Error {
 	constructor(cause: unknown) {
@@ -966,6 +967,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		onRefreshOutcome: handleRefreshOutcome,
 	});
 	registerTransientNetworkErrorRetry(pi, identity.providerId);
+	// Where each model really comes from (login or API key, which lab), for other extensions.
+	const upstreams = new UpstreamsAnnouncer(pi, identity.providerId, () =>
+		resolveConnection(agentDir, identity.providerId),
+	);
+	upstreams.register();
 
 	let activeContext: ExtensionContext | undefined;
 	let latestStaleModelIds: string[] = [];
@@ -1119,8 +1125,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		streamSimple,
 		fastMode,
 		refreshCoordinator: modelRefreshCoordinator,
-		onRefresh: (currentConnection) =>
-			registerConfiguredProvider(currentConnection, { forceRefresh: true, replaceCache: true }),
+		onRefresh: async (currentConnection) => {
+			const result = await registerConfiguredProvider(currentConnection, { forceRefresh: true, replaceCache: true });
+			void upstreams.refreshed();
+			return result;
+		},
 	});
 
 	if (!connection) {

@@ -244,6 +244,42 @@ instead of the Codex Responses format every other model uses. This happens autom
 - Changing the setting refreshes the model list (the cache records it). The first request of an ongoing session after
   a model switches formats is a cache miss.
 
+## Where each model comes from (for other extensions)
+
+Through CLIProxyAPI pi sees one provider, but each model is served by a subscription login or an API key of some lab,
+and the two can differ in window, prompt-cache lifetime and price (a Claude login keeps a cache for an hour, a Claude
+API key for 5 minutes by default). This package tells other pi extensions where each model comes from, over pi's event
+bus (`pi.events`), so that they need to know nothing about CLIProxyAPI.
+[pi-cache-keeper](https://github.com/ngvoicu/pi-cache-keeper) uses it to fill windows, cache lifetimes and prices
+from providers.dev.
+
+- **`model-upstreams:request`**: an extension that wants the routes sends this (any payload). This package then asks
+  CLIProxyAPI `GET /v1/models?include=accounts` and answers. Nothing is asked when no extension wants it.
+- **`model-upstreams`**: `{ provider, models: { [modelId]: { upstreams, fallbacks? } } }`, the answer, and again after
+  `/cliproxyapi-refresh`. `upstreams` are what may serve the model (several: it is not known which), `fallbacks` what
+  may answer when those fail or cool down.
+- **`model-upstreams:answered`**: `{ provider, model, upstreams }`, after a response whose `X-CPA-AUTH-KIND` header
+  names the kind of credential that answered (not over the Codex WebSocket, which has no response headers).
+
+An upstream is `{ provider, model?, subscription? }`: the pi provider the model would come from if used directly
+(`anthropic`, `openai-codex`, `openai`, `meta`, `openrouter`, `google`) or a providers.dev provider pi has none for
+(`devin`, `antigravity`); the model's id there when it differs; `true` for a subscription login, `false` for an API
+key, absent when not known.
+
+How the routes are made:
+
+- **A CLIProxyAPI that lists its credentials** ([router-for-me/CLIProxyAPI#7634](https://github.com/router-for-me/CLIProxyAPI/pull/7634)):
+  CLIProxyAPI uses the highest priority that is free in every routing mode and picks among the credentials sharing it
+  (round-robin by default; with no priority set, all share 0). So the `upstreams` are the credentials at the highest
+  priority, the `fallbacks` the others. An API key whose host CLIProxyAPI names goes by the host (`openrouter.ai`,
+  `api.openai.com`, `api.anthropic.com`, `generativelanguage.googleapis.com`; another host is not known), whatever its
+  entry is called; without a host, an OpenAI-compatible entry counts as OpenRouter only when named `openrouter`. A
+  prefix CLIProxyAPI puts before a credential's models is left out of the model id. A credential at the top that leads
+  somewhere not known makes the route not known (`upstreams: []`).
+- **A CLIProxyAPI that doesn't**: the lab its model list names as the owner (`owned_by`), by login or key
+  (`subscription` absent; for OpenAI the Codex login or an OpenAI key); `devin/…` (CLIProxyAPI's own prefix) is Devin;
+  any other name with a slash is not known.
+
 ## Migration from static models.json
 
 If you previously maintained a static provider such as `cpa-responses` in `~/.pi/agent/models.json`:
