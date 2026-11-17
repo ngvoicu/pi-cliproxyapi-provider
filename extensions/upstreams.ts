@@ -13,7 +13,8 @@
  * - `model-upstreams`: `{ provider, models: { [id]: { upstreams, fallbacks? } } }`, after a request and, once one came,
  *   after `/cliproxyapi-refresh`. `upstreams` are what may serve the model (several: not known which), `fallbacks` what may
  *   answer when those fail.
- * - `model-upstreams:answered`: `{ provider, model, upstreams }`, after a response that names the kind that answered.
+ * - `model-upstreams:answered`: `{ provider, model, upstreams }`, after a response that names the kind that answered
+ *   (the `X-CPA-AUTH-KIND` header, or `cpa_auth_kind` on response.created over the Codex WebSocket).
  *
  * An upstream is `{ provider, model?, subscription? }`: the pi provider the model would come from if used directly
  * (anthropic, openai-codex, openai, meta, openrouter, google) or a providers.dev provider pi has none for (devin,
@@ -26,6 +27,8 @@ export const REQUEST_EVENT = "model-upstreams:request";
 export const UPSTREAMS_EVENT = "model-upstreams";
 export const ANSWERED_EVENT = "model-upstreams:answered";
 export const AUTH_KIND_HEADER = "x-cpa-auth-kind";
+/** The same on a WebSocket turn's response.created event. */
+export const AUTH_KIND_FIELD = "cpa_auth_kind";
 const REQUEST_TIMEOUT_MS = 10_000;
 
 export interface Upstream {
@@ -221,10 +224,22 @@ export class UpstreamsAnnouncer {
 				.find(([name]) => name.toLowerCase() === AUTH_KIND_HEADER)?.[1]
 				?.trim()
 				.toLowerCase();
-			if (kind !== "oauth" && kind !== "apikey") return;
-			const upstreams = answeredUpstreams(model.id, kind, this.listed);
-			if (upstreams) this.pi.events.emit(ANSWERED_EVENT, { provider: this.providerId, model: model.id, upstreams });
+			this.answered(model.id, kind);
 		});
+		// The Codex WebSocket has no response headers per turn: CLIProxyAPI names the kind on response.created.
+		this.pi.on("provider_stream_event", (event) => {
+			if (event.provider !== this.providerId || !this.listed) return;
+			const data = event.data;
+			if (!isRecord(data) || data.type !== "response.created") return;
+			const kind = data[AUTH_KIND_FIELD];
+			if (typeof kind === "string") this.answered(event.model, kind.trim().toLowerCase());
+		});
+	}
+
+	private answered(modelId: string, kind: string | undefined): void {
+		if (!this.listed || (kind !== "oauth" && kind !== "apikey")) return;
+		const upstreams = answeredUpstreams(modelId, kind, this.listed);
+		if (upstreams) this.pi.events.emit(ANSWERED_EVENT, { provider: this.providerId, model: modelId, upstreams });
 	}
 
 	/** After the model list was fetched again: tells the routes again, if an extension asked for them. */

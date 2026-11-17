@@ -259,7 +259,8 @@ from providers.dev.
   `/cliproxyapi-refresh`. `upstreams` are what may serve the model (several: it is not known which), `fallbacks` what
   may answer when those fail or cool down.
 - **`model-upstreams:answered`**: `{ provider, model, upstreams }`, after a response whose `X-CPA-AUTH-KIND` header
-  names the kind of credential that answered (not over the Codex WebSocket, which has no response headers).
+  names the kind of credential that answered; over the Codex WebSocket, which has no response headers per turn, from
+  the `cpa_auth_kind` field CLIProxyAPI puts on each turn's `response.created` event.
 
 An upstream is `{ provider, model?, subscription? }`: the pi provider the model would come from if used directly
 (`anthropic`, `openai-codex`, `openai`, `meta`, `openrouter`, `google`) or a providers.dev provider pi has none for

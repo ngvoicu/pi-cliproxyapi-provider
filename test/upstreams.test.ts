@@ -259,6 +259,43 @@ describe("the events", () => {
 		expect(emitted).toEqual([]);
 	});
 
+	it("over the Codex WebSocket, what answered comes from response.created, which has no headers", async () => {
+		const { pi, handlers, listeners, emitted } = fakePi();
+		const announcer = new UpstreamsAnnouncer(
+			pi,
+			"cliproxyapi",
+			() => ({ baseUrlInput: "x", apiKey: "k" }),
+			async () => accounts,
+		);
+		announcer.register();
+		listeners.get(REQUEST_EVENT)!({});
+		await announcer.announce();
+		emitted.length = 0;
+		const streamEvent = (data: unknown, provider = "cliproxyapi") =>
+			handlers.get("provider_stream_event")!(
+				{ type: "provider_stream_event", provider, api: "x", model: "claude-opus-5-5", data },
+				{},
+			);
+		streamEvent({ type: "response.created", cpa_auth_kind: "apikey", response: { id: "r" } });
+		expect(emitted).toEqual([
+			[
+				ANSWERED_EVENT,
+				{
+					provider: "cliproxyapi",
+					model: "claude-opus-5-5",
+					upstreams: [{ provider: "anthropic", subscription: false }],
+				},
+			],
+		]);
+		// Other events, a response.created without the field (an older CLIProxyAPI), or another provider: nothing.
+		emitted.length = 0;
+		streamEvent({ type: "response.output_text.delta", cpa_auth_kind: "apikey" });
+		streamEvent({ type: "response.created", response: { id: "r" } });
+		streamEvent({ type: "response.created", cpa_auth_kind: "apikey" }, "openai");
+		streamEvent("junk");
+		expect(emitted).toEqual([]);
+	});
+
 	it("nothing is said when CLIProxyAPI does not answer or no connection is set up", async () => {
 		const { pi, emitted } = fakePi();
 		await new UpstreamsAnnouncer(
