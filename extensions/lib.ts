@@ -49,6 +49,7 @@ export interface CliproxyConfigFile {
 	providerName?: string;
 	fast?: boolean;
 	pause?: boolean;
+	tps?: boolean;
 	claudeMessages?: boolean | "auto";
 }
 
@@ -470,6 +471,18 @@ export function resolveClaudeMessagesDefault(agentDir: string): ClaudeMessagesMo
 		throw new Error(`${CONFIG_FILE_NAME} field "claudeMessages" must be true, false or "auto"`);
 	}
 	return file.claudeMessages ? "on" : "off";
+}
+
+/** Resolve whether the TUI elapsed/TPS helper runs, from cliproxyapi.json, defaulting to true. */
+export function resolveTpsDefault(agentDir: string): boolean {
+	const file = loadConfigFile(agentDir);
+	if (file.tps === undefined) {
+		return true;
+	}
+	if (typeof file.tps !== "boolean") {
+		throw new Error(`${CONFIG_FILE_NAME} field "tps" must be a boolean`);
+	}
+	return file.tps;
 }
 
 /** Resolve the request pause preference from cliproxyapi.json, defaulting to false. */
